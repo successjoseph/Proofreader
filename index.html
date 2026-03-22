@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Auto-Editor</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root { --bg: #1a1a1a; --fg: #e0e0e0; --accent: #00adb5; --del: #ff6b6b; --add: #6bff6b; }
         body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--fg); margin: 0; display: flex; height: 100vh; }
@@ -21,8 +22,9 @@
         button { background: var(--accent); border: none; padding: 8px 16px; color: #000; font-weight: bold; cursor: pointer; border-radius: 4px; }
         button:hover { opacity: 0.9; }
         input { background: #333; border: 1px solid #444; color: #fff; padding: 5px; width: 200px; }
+        select { background: #333; border: 1px solid #444; color: #fff; padding: 5px; width: 100%; margin-bottom: 5px; }
 
-        /* 🎁 Indexing & Highlights */
+        /* Indexing & Highlights */
         span.word { cursor: pointer; padding: 0 1px; border-radius: 2px; transition: background 0.2s; }
         span.word:hover { background: #333; }
         span.changed-word { background: rgba(0, 173, 181, 0.2); border-bottom: 2px solid var(--accent); }
@@ -31,18 +33,21 @@
         #synonym-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #333; padding: 20px; border: 1px solid var(--accent); display: none; z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         .syn-option { display: block; width: 100%; padding: 10px; background: #444; margin-bottom: 5px; border: none; color: #fff; cursor: pointer; }
         .syn-option:hover { background: var(--accent); color: #000; }
-
-        /* Helper Classes */
-        .loading { opacity: 0.5; pointer-events: none; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
+    <h3>📚 Books</h3>
+    <select id="book-select" onchange="window.switchBook()"></select>
+    <button onclick="window.createNewBook()" style="margin-top: 5px; margin-bottom: 20px;">+ New Book</button>
+    
     <h3>📖 Chapters</h3>
     <div id="chapter-list"></div>
-    <button onclick="createNewChapter()" style="margin-top: 10px;">+ New Chapter</button>
+    <button onclick="window.createNewChapter()" style="margin-top: 10px;">+ New Chapter</button>
+    
     <div style="margin-top: auto;">
+        <button onclick="window.toggleChangesView()" style="width:100%; margin-bottom: 10px; background: #ffb74d;">🔍 View Changes</button>
         <p id="word-counter">Words: 0</p>
         <a href="/export" target="_blank"><button style="width:100%">Export .docx</button></a>
     </div>
@@ -54,10 +59,10 @@
             <input type="text" id="chapter-title" placeholder="Chapter Title">
         </div>
         <div>
-            <button onclick="undo()">↶ Undo</button>
-            <button onclick="redo()">↷ Redo</button>
-            <button onclick="getAICritique()">🤖 AI Review</button>
-            <button onclick="saveChapter()">💾 Save</button>
+            <button onclick="window.undo()">↶ Undo</button>
+            <button onclick="window.redo()">↷ Redo</button>
+            <button onclick="window.getAICritique()">🤖 AI Review</button>
+            <button onclick="window.saveChapter()">💾 Save</button>
         </div>
     </div>
     
@@ -66,15 +71,16 @@
     </div>
 
     <div id="feedback-panel">
-        <strong>AI Feedback:</strong> <span id="ai-output">No analysis yet.</span>
+        <strong>AI Feedback:</strong> <div id="ai-output" style="margin-top: 10px;">No analysis yet.</div>
     </div>
 </div>
 
 <div id="synonym-modal">
     <h4>Select Replacement</h4>
     <div id="synonym-list"></div>
-    <button onclick="closeModal()" style="margin-top: 10px; background: #555; color: #fff;">Cancel</button>
+    <button onclick="window.closeModal()" style="margin-top: 10px; background: #555; color: #fff;">Cancel</button>
 </div>
+
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
     import { getFirestore, collection, getDocs, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
@@ -91,82 +97,143 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // Globalizing state for inline HTML handlers
     window.currentChapterId = 1;
     window.originalText = "";
     window.wordsArray = [];
     window.changes = [];
     window.undoStack = [];
     window.redoStack = [];
+    window.currentBookId = "book_1";
+    window.aiHistory = []; 
 
-    document.addEventListener('DOMContentLoaded', () => {
-        window.loadChapterList();
-        window.loadChapter(1);
+    document.addEventListener('DOMContentLoaded', async () => {
+        await window.loadBooks();
     });
 
+    window.loadBooks = async function() {
+        const querySnapshot = await getDocs(collection(db, "books"));
+        const select = document.getElementById('book-select');
+        select.innerHTML = '';
+        
+        let hasBooks = false;
+        querySnapshot.forEach((docSnap) => {
+            hasBooks = true;
+            const data = docSnap.data();
+            const option = document.createElement('option');
+            option.value = docSnap.id;
+            option.innerText = data.name || docSnap.id;
+            select.appendChild(option);
+        });
+
+        if (!hasBooks) {
+            // Create a default book if none exist
+            await setDoc(doc(db, "books", "book_1"), { name: "My First Book" });
+            const option = document.createElement('option');
+            option.value = "book_1";
+            option.innerText = "My First Book";
+            select.appendChild(option);
+        }
+
+        window.currentBookId = select.value;
+        await window.loadChapterList();
+    };
+
     window.loadChapterList = async function() {
-        const querySnapshot = await getDocs(collection(db, "chapters"));
+        const querySnapshot = await getDocs(collection(db, "books", window.currentBookId, "chapters"));
         const list = document.getElementById('chapter-list');
         list.innerHTML = '';
         
         let ids = [];
-        querySnapshot.forEach((doc) => {
-            ids.push(parseInt(doc.id));
+        querySnapshot.forEach((docSnap) => {
+            ids.push(parseInt(docSnap.id));
+            const data = docSnap.data();
             const btn = document.createElement('button');
-            btn.className = `chapter-btn ${doc.id == window.currentChapterId ? 'active' : ''}`;
-            btn.innerText = `Chapter ${doc.id}`;
-            btn.onclick = () => window.loadChapter(doc.id);
+            btn.className = `chapter-btn ${docSnap.id == window.currentChapterId ? 'active' : ''}`;
+            btn.innerText = data.title || `Chapter ${docSnap.id}`;
+            btn.onclick = () => window.loadChapter(docSnap.id);
             list.appendChild(btn);
         });
         
-        if(ids.length === 0) window.createNewChapter();
+        if (ids.length === 0) {
+            window.createNewChapter();
+        } else if (document.querySelector('.chapter-btn')) {
+            document.querySelector('.chapter-btn').click();
+        }
     };
 
     window.createNewChapter = async function() {
-        const querySnapshot = await getDocs(collection(db, "chapters"));
+        const querySnapshot = await getDocs(collection(db, "books", window.currentBookId, "chapters"));
         let ids = [];
-        querySnapshot.forEach((doc) => ids.push(parseInt(doc.id)));
+        querySnapshot.forEach((docSnap) => ids.push(parseInt(docSnap.id)));
         
         const newId = ids.length > 0 ? Math.max(...ids) + 1 : 1;
         window.currentChapterId = newId;
         window.originalText = "";
         window.wordsArray = [];
         window.changes = [];
+        window.aiHistory = [];
         window.renderEditor();
         document.getElementById('chapter-title').value = `Chapter ${newId}`;
-        window.loadChapterList();
+        
+        // Save placeholder immediately so it shows in list
+        await window.saveChapter(true); 
     };
 
     window.loadChapter = async function(id) {
         window.currentChapterId = id;
         document.querySelectorAll('.chapter-btn').forEach(b => b.classList.remove('active'));
         
-        const docRef = doc(db, "chapters", id.toString());
+        const docRef = doc(db, "books", window.currentBookId, "chapters", id.toString());
         const docSnap = await getDoc(docRef);
         
         if (docSnap.exists()) {
             const data = docSnap.data();
-            window.originalText = data.content;
+            window.originalText = data.content || "";
             window.changes = data.changes || [];
+            window.aiHistory = data.history || [];
             document.getElementById('chapter-title').value = data.title || `Chapter ${id}`;
+            
+            // Re-render latest AI history if it exists
+            if (window.aiHistory.length > 0) {
+                const lastMsg = window.aiHistory[window.aiHistory.length - 1];
+                if (lastMsg.role === 'assistant') {
+                    document.getElementById('ai-output').innerHTML = marked.parse(lastMsg.content);
+                }
+            } else {
+                document.getElementById('ai-output').innerHTML = "No analysis yet.";
+            }
+
         } else {
             window.originalText = "Paste your chapter content here...";
             window.changes = [];
+            window.aiHistory = [];
+            document.getElementById('ai-output').innerHTML = "No analysis yet.";
         }
+        
         window.wordsArray = window.originalText.split(' ');
         window.renderEditor();
     };
 
-    window.saveChapter = async function() {
+    window.saveChapter = async function(silent = false) {
+        const titleVal = document.getElementById('chapter-title').value;
         const payload = {
             content: window.originalText,
             changes: window.changes,
-            title: document.getElementById('chapter-title').value,
-            word_count: window.wordsArray.length
+            title: titleVal,
+            word_count: window.wordsArray.length,
+            history: window.aiHistory
         };
-        await setDoc(doc(db, "chapters", window.currentChapterId.toString()), payload);
-        alert('Chapter Saved to Firebase');
-        window.loadChapterList();
+        
+        await setDoc(doc(db, "books", window.currentBookId, "chapters", window.currentChapterId.toString()), payload);
+        
+        if (!silent) alert('Chapter Saved to Firebase');
+        
+        // Soft refresh the sidebar to update titles without reloading the text
+        const activeBtn = document.querySelector('.chapter-btn.active');
+        if (activeBtn) activeBtn.innerText = titleVal;
+        
+        // Refresh full list if it's a new chapter
+        if (silent) window.loadChapterList();
     };
 
     window.renderEditor = function() {
@@ -191,6 +258,13 @@
             editor.appendChild(span);
         });
         document.getElementById('word-counter').innerText = `Words: ${window.wordsArray.length}`;
+        
+        // Highlight active chapter in sidebar
+        document.querySelectorAll('.chapter-btn').forEach(b => {
+            if (b.innerText === document.getElementById('chapter-title').value) {
+                b.classList.add('active');
+            }
+        });
     };
 
     window.handleDoubleTap = async function(e, index, word) {
@@ -204,21 +278,25 @@
         list.innerHTML = 'Loading AI suggestions...';
         modal.style.display = 'block';
 
-        const res = await fetch('http://localhost:5000/api/ai/synonyms', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ word: word, context: context })
-        });
-        
-        const synonyms = await res.json();
-        list.innerHTML = '';
-        synonyms.forEach(syn => {
-            const btn = document.createElement('button');
-            btn.className = 'syn-option';
-            btn.innerText = syn;
-            btn.onclick = () => window.applyChange(index, word, syn, 'synonym');
-            list.appendChild(btn);
-        });
+        try {
+            const res = await fetch('http://localhost:5000/api/ai/synonyms', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ word: word, context: context })
+            });
+            
+            const synonyms = await res.json();
+            list.innerHTML = '';
+            synonyms.forEach(syn => {
+                const btn = document.createElement('button');
+                btn.className = 'syn-option';
+                btn.innerText = syn;
+                btn.onclick = () => window.applyChange(index, word, syn, 'synonym');
+                list.appendChild(btn);
+            });
+        } catch (error) {
+            list.innerHTML = 'Backend connection error.';
+        }
     };
 
     window.closeModal = function() {
@@ -258,14 +336,60 @@
         const btn = document.querySelector('#toolbar button:nth-child(3)');
         btn.innerText = "Analyzing...";
         const currentText = document.getElementById('editor').innerText;
-        const res = await fetch('http://localhost:5000/api/ai/critique', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ text: currentText })
+        
+        try {
+            const res = await fetch('http://localhost:5000/api/ai/critique', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ text: currentText, history: window.aiHistory })
+            });
+            
+            const data = await res.json();
+            
+            window.aiHistory.push({role: "user", content: "Analyzed current chapter text."});
+            window.aiHistory.push({role: "assistant", content: data.critique});
+            
+            document.getElementById('ai-output').innerHTML = marked.parse(data.critique);
+            btn.innerText = "🤖 AI Review";
+            
+            window.saveChapter(true); 
+        } catch (error) {
+            document.getElementById('ai-output').innerHTML = "Backend connection error.";
+            btn.innerText = "🤖 AI Review";
+        }
+    };
+
+    window.toggleChangesView = function() {
+        let changeLog = "Changes made:\n\n";
+        window.changes.forEach(c => {
+            changeLog += `- "${c.original_word}" ➡️ "${c.new_word}"\n`;
         });
-        const data = await res.json();
-        document.getElementById('ai-output').innerText = data.critique;
-        btn.innerText = "🤖 AI Review";
+        alert(window.changes.length ? changeLog : "No changes recorded yet.");
+    };
+
+    window.createNewBook = async function() {
+        const bookName = prompt("Enter new book name:");
+        if (!bookName) return;
+        const newBookId = "book_" + Date.now();
+        
+        // Save book metadata to root books collection
+        await setDoc(doc(db, "books", newBookId), { name: bookName });
+        
+        window.currentBookId = newBookId;
+        
+        const select = document.getElementById('book-select');
+        const option = document.createElement('option');
+        option.value = newBookId;
+        option.innerText = bookName;
+        select.appendChild(option);
+        select.value = newBookId;
+        
+        await window.createNewChapter();
+    };
+
+    window.switchBook = async function() {
+        window.currentBookId = document.getElementById('book-select').value;
+        await window.loadChapterList();
     };
 
     document.getElementById('editor').addEventListener('input', (e) => {

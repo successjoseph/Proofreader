@@ -1,4 +1,3 @@
-# Replace imports and config at the top of app.py
 import os
 import io
 from flask import Flask, request, jsonify, send_file
@@ -37,17 +36,32 @@ def ai_synonyms():
 # ai_critique route
 @app.route('/api/ai/critique', methods=['POST'])
 def ai_critique():
-    text = request.json.get('text')
-    prompt = f"Analyze the following chapter text. Identify writing flaws, inconsistencies, and pacing issues. Be concise and constructive.\n\nText: {text[:4000]}..."
+    data = request.json
+    text = data.get('text')
+    history = data.get('history', []) # pull context history
+    
+    system_prompt = """You are an expert editor. Analyze the chapter text for flaws, inconsistencies, and pacing. 
+    Format your response in Markdown. At the end, you MUST provide actionable snippets in this exact format:
+    **Suggested Snippets:**
+    * Change "[old text]" to "[new text]" """
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # append previous chat history for context
+    for msg in history:
+        messages.append(msg)
+        
+    messages.append({"role": "user", "content": f"Text to analyze: {text[:4000]}..."})
+    
     try:
         response = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[{"role": "user", "content": prompt}]
+            messages=messages
         )
         return jsonify({"critique": response.choices[0].message.content})
     except Exception as e:
         return jsonify({"critique": str(e)})
-    
+        
 @app.route('/export', methods=['POST'])
 def export_docx():
     data = request.json
