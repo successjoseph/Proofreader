@@ -279,7 +279,7 @@
         modal.style.display = 'block';
 
         try {
-            const res = await fetch('http://localhost:5000/api/ai/synonyms', {
+            const res = await fetch('/api/ai/synonyms', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ word: word, context: context })
@@ -338,7 +338,7 @@
         const currentText = document.getElementById('editor').innerText;
         
         try {
-            const res = await fetch('http://localhost:5000/api/ai/critique', {
+            const res = await fetch('/api/ai/critique', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ text: currentText, history: window.aiHistory })
