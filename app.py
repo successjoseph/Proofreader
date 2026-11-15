@@ -24,7 +24,7 @@ def ai_synonyms():
     prompt = f"Give me 3 synonyms for the word '{word}' suitable for this context: '{context}'. Return only the words separated by commas."
     try:
         response = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="gptOSS-20b",
             messages=[{"role": "user", "content": prompt}]
         )
         synonyms_text = response.choices[0].message.content
@@ -55,7 +55,7 @@ def ai_critique():
     
     try:
         response = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="gptOSS-20b",
             messages=messages
         )
         return jsonify({"critique": response.choices[0].message.content})
