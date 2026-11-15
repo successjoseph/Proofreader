@@ -316,6 +316,37 @@
         const getWords = (text) => text.match(/\S+/g) || [];
         const isSpace = (part) => /^\s+$/.test(part);
 
+        // Reads text out of the editor (or part of it) keeping line breaks.
+        // textContent drops them when the browser stores a new line as <br> or <div>.
+        function serializeText(root) {
+            let out = '';
+            const isBlock = (node) => node.nodeName === 'DIV' || node.nodeName === 'P';
+            const walk = (node) => {
+                node.childNodes.forEach(child => {
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        out += child.data;
+                    } else if (child.nodeName === 'BR') {
+                        // a <br> that only holds an empty line open inside a block adds no extra line
+                        if (!(isBlock(node) && child === node.lastChild && node.childNodes.length > 1)) out += '\n';
+                    } else if (child.nodeType === Node.ELEMENT_NODE) {
+                        if (isBlock(child) && out && !out.endsWith('\n')) out += '\n';
+                        walk(child);
+                    }
+                });
+            };
+            walk(root);
+            return out;
+        }
+        const editorText = () => serializeText(editor);
+
+        // Inserts plain text at the caret, using real newline characters for line breaks
+        function insertPlainText(text) {
+            text.split('\n').forEach((line, i) => {
+                if (i > 0) document.execCommand('insertLineBreak');
+                if (line) document.execCommand('insertText', false, line);
+            });
+        }
+
         // Applies saved changes to a chapter's text, skipping any that no longer line up
         function applyChangesToText(text, changes) {
             let wordIndex = 0;
@@ -714,13 +745,14 @@
         };
 
         function updateEditorMeta() {
-            editor.classList.toggle('is-empty', editor.textContent.length === 0);
-            document.getElementById('word-counter').innerText = `Words: ${getWords(editor.textContent).length}`;
+            const text = editorText();
+            editor.classList.toggle('is-empty', text.length === 0);
+            document.getElementById('word-counter').innerText = `Words: ${getWords(text).length}`;
         }
 
         // Reads what is on screen back into originalText + changes, without re-rendering (keeps the caret)
         window.syncFromEditor = function() {
-            const parts = tokenize(editor.textContent);
+            const parts = tokenize(editorText());
             const previousWordCount = getWords(window.originalText).length;
             const kept = [];
             let wordIndex = 0;
@@ -755,14 +787,14 @@
         editor.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                document.execCommand('insertText', false, '\n');
+                document.execCommand('insertLineBreak');
             }
         });
 
         editor.addEventListener('paste', (e) => {
             e.preventDefault();
             const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-            document.execCommand('insertText', false, text.replace(/\r\n?/g, '\n'));
+            insertPlainText(text.replace(/\r\n?/g, '\n'));
         });
 
         // re-draw the word spans once typing is done
@@ -801,7 +833,7 @@
             const before = document.createRange();
             before.selectNodeContents(editor);
             before.setEnd(range.startContainer, range.startOffset);
-            const prefix = before.toString();
+            const prefix = serializeText(before.cloneContents());
             const wordsBefore = getWords(prefix).length;
             const index = /\S$/.test(prefix) ? wordsBefore - 1 : wordsBefore;
 
@@ -817,7 +849,7 @@
 
         window.handleDoubleTap = async function(e, index) {
             e.preventDefault();
-            const words = getWords(editor.textContent);
+            const words = getWords(editorText());
             const token = words[index];
             if (!token) return;
             // keep punctuation around the word, e.g. "dog," -> lead "", core "dog", trail ","
@@ -981,7 +1013,7 @@
             const btn = document.getElementById('ai-review-btn');
             if (btn.disabled) return;
             window.syncFromEditor();
-            const currentText = editor.textContent.trim();
+            const currentText = editorText().trim();
             if (!currentText) return window.showToast("Add some text before asking for a review.");
 
             const chapterId = window.currentChapterId;
